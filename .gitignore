@@ -1,0 +1,68 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Model files (keep examples but ignore large trained models)
+models/*.pth
+models/*.pkl
+models/*.npy
+!models/.gitkeep
+
+# Log files
+logs/*.log
+logs/*.txt
+!logs/.gitkeep
+
+# Visualization outputs (keep examples)
+visualizations/*.png
+visualizations/*.gif
+visualizations/*.mp4
+!visualizations/.gitkeep
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
