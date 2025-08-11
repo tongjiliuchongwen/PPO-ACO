@@ -6,6 +6,7 @@ import matplotlib.animation as animation
 import numpy as np
 import config
 import os
+import matplotlib.lines as mlines
 
 class Visualizer:
     """
@@ -129,6 +130,9 @@ class Visualizer:
         # 设置背景
         ax.set_facecolor('lightgray')
         
+        # 标记是否有可供图例显示的内容
+        has_legend_items = False
+        
         # 绘制障碍物
         for obs_x, obs_y, obs_radius in self.obstacles:
             circle = patches.Circle(
@@ -141,10 +145,13 @@ class Visualizer:
         # 绘制轨迹
         if trajectory is not None and len(trajectory) > 1:
             trajectory = np.array(trajectory)
+            # 确保轨迹线有一个明确的标签
             ax.plot(
                 trajectory[:, 0], trajectory[:, 1], 
                 'g-', linewidth=2, alpha=0.7, label='Trajectory'
             )
+            # 标记我们绘制了带标签的元素
+            has_legend_items = True
         
         # 绘制智能体
         agent_marker = patches.Circle(
@@ -180,116 +187,154 @@ class Visualizer:
         ax.grid(True, alpha=0.3)
         ax.set_aspect('equal')
         
-        if trajectory is not None:
+        # 只有在需要时（即绘制了带标签的元素后）才调用 legend()
+        if has_legend_items:
             ax.legend()
-    
-    def generate_animation(self, trajectory_data, filename="simulation.gif"):
-        """
-        生成轨迹动画
-        
-        Args:
-            trajectory_data: 轨迹数据列表，每个元素包含位置、朝向等信息
-            filename: 输出文件名
-        """
-        if not trajectory_data:
-            print("没有轨迹数据可供动画生成")
-            return
-        
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=self.figure_size, dpi=self.dpi)
-        
-        # 初始化动画元素
-        def init():
-            ax1.clear()
-            ax2.clear()
-            return []
-        
-        def animate(frame):
-            ax1.clear()
-            ax2.clear()
-            
-            # 获取当前帧数据
-            if frame < len(trajectory_data):
-                data = trajectory_data[frame]
-                agent_pos = data['agent_pos']
-                target_pos = data['target_pos']
-                agent_theta = data.get('agent_theta', 0)
-                trajectory = data.get('trajectory', None)
-                
-                # 绘制信息素热力图
-                self._plot_pheromone_heatmap(ax1, agent_pos, target_pos, agent_theta)
-                ax1.set_title(f"Pheromone Map (Step {frame})")
-                
-                # 绘制环境
-                self._plot_environment(ax2, agent_pos, target_pos, agent_theta, trajectory)
-                ax2.set_title(f"Environment (Step {frame})")
-            
-            return []
-        
-        # 创建动画
-        anim = animation.FuncAnimation(
-            fig, animate, init_func=init,
-            frames=len(trajectory_data), interval=100, blit=False
-        )
-        
-        # 保存动画
-        save_path = os.path.join(self.output_dir, filename)
-        anim.save(save_path, writer='pillow', fps=10)
-        print(f"动画已保存到: {save_path}")
-        
-        plt.close(fig)
     
     def plot_training_statistics(self, ppo_agent, save_path=None):
         """
         绘制训练统计图表
         
         Args:
-            ppo_agent: PPO智能体实例
+            ppo_agent: PPO智能体实例，其中包含了logger
             save_path: 保存路径（可选）
         """
         fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+        fig.suptitle('Training Statistics')
         
         # 奖励曲线
         if ppo_agent.logger['batch_rews']:
+            # logger['batch_rews'] 是一个列表的列表，需要计算每个内部列表的均值
             avg_rewards = [np.mean(rewards) for rewards in ppo_agent.logger['batch_rews']]
             axes[0, 0].plot(avg_rewards)
-            axes[0, 0].set_title('Average Episode Reward')
+            axes[0, 0].set_title('Average Episode Reward per Iteration')
             axes[0, 0].set_xlabel('Iteration')
             axes[0, 0].set_ylabel('Reward')
             axes[0, 0].grid(True)
-        
+        else:
+            axes[0, 0].set_title('No Reward Data Available')
+
         # 成功率曲线
         if ppo_agent.logger['batch_success_rate']:
             axes[0, 1].plot(ppo_agent.logger['batch_success_rate'])
-            axes[0, 1].set_title('Success Rate')
+            axes[0, 1].set_title('Success Rate per Iteration')
             axes[0, 1].set_xlabel('Iteration')
             axes[0, 1].set_ylabel('Success Rate')
             axes[0, 1].grid(True)
-        
+        else:
+            axes[0, 1].set_title('No Success Rate Data Available')
+
         # Actor损失曲线
         if ppo_agent.logger['actor_losses']:
             axes[1, 0].plot(ppo_agent.logger['actor_losses'])
-            axes[1, 0].set_title('Actor Loss')
+            axes[1, 0].set_title('Average Actor Loss per Iteration')
             axes[1, 0].set_xlabel('Iteration')
             axes[1, 0].set_ylabel('Loss')
             axes[1, 0].grid(True)
-        
+        else:
+            axes[1, 0].set_title('No Actor Loss Data Available')
+
         # Critic损失曲线
         if ppo_agent.logger['critic_losses']:
             axes[1, 1].plot(ppo_agent.logger['critic_losses'])
-            axes[1, 1].set_title('Critic Loss')
+            axes[1, 1].set_title('Average Critic Loss per Iteration')
             axes[1, 1].set_xlabel('Iteration')
             axes[1, 1].set_ylabel('Loss')
             axes[1, 1].grid(True)
-        
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
         else:
-            save_path = os.path.join(self.output_dir, "training_statistics.png")
-            plt.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+            axes[1, 1].set_title('No Critic Loss Data Available')
         
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # 调整布局以适应总标题
+        
+        if save_path is None:
+            save_path = os.path.join(self.output_dir, "training_statistics.png")
+
+        plt.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
         print(f"训练统计图已保存到: {save_path}")
+        plt.close(fig)    
+    
+    def generate_animation(self, trajectory_data, filename="simulation.gif"):
+        """
+        生成轨迹动画 (优化版：静态背景 + 动态前景)
+        
+        Args:
+            trajectory_data: 轨迹数据列表，每个元素包含位置、朝向等信息
+            filename: 输出文件名
+        """
+        if not trajectory_data:
+            print("警告: 没有轨迹数据可供动画生成")
+            return
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=self.figure_size, dpi=self.dpi)
+        
+        # --- 1. 绘制所有静态背景元素 ---
+        
+        # 绘制左侧静态的信息素热力图
+        # 我们只需要第一帧的数据来获取目标位置
+        initial_data = trajectory_data[0]
+        self._plot_pheromone_heatmap(ax1, initial_data['agent_pos'], initial_data['target_pos'], 0)
+        ax1.set_title("Pheromone Map (Static)")
+        
+        # 绘制右侧静态的环境背景（障碍物、目标）
+        self._plot_environment(ax2, initial_data['agent_pos'], initial_data['target_pos'], 0)
+        ax2.set_title("Environment")
+
+        # --- 2. 定义需要动态更新的元素 ---
+
+        # 在右侧环境图上，初始化一个空的轨迹线对象和一个智能体位置对象
+        # 这些是我们每一帧需要更新的东西
+        trajectory_line, = ax2.plot([], [], 'g-', linewidth=2, alpha=0.7)
+        agent_marker = patches.Circle(initial_data['agent_pos'], 0.2, 
+                                      linewidth=2, edgecolor='blue', facecolor='lightblue')
+        ax2.add_patch(agent_marker)
+        
+        # --- 3. 定义动画的初始化和更新函数 ---
+        
+        def init():
+            """初始化函数，设置空的动态元素"""
+            trajectory_line.set_data([], [])
+            agent_marker.center = initial_data['agent_pos']
+            return [trajectory_line, agent_marker]
+
+        def animate(frame):
+            """动画更新函数，只更新动态元素"""
+            if frame >= len(trajectory_data):
+                return [trajectory_line, agent_marker]
+
+            data = trajectory_data[frame]
+            agent_pos = data['agent_pos']
+            trajectory = np.array(data.get('trajectory', []))
+            
+            # 更新智能体的位置
+            agent_marker.center = agent_pos
+            
+            # 更新轨迹线
+            if trajectory.size > 0:
+                trajectory_line.set_data(trajectory[:, 0], trajectory[:, 1])
+                
+            # 更新标题
+            ax2.set_title(f"Environment (Step {frame})")
+            
+            # 返回所有被修改过的 "artist" 对象
+            return [trajectory_line, agent_marker]
+
+        # --- 4. 创建并保存动画 ---
+        
+        # 使用 blit=True 可以显著提高渲染速度，因为它只重绘变化的部分
+        anim = animation.FuncAnimation(
+            fig, animate, init_func=init,
+            frames=len(trajectory_data), interval=100, blit=True
+        )
+        
+        # 保存动画
+        save_path = os.path.join(self.output_dir, filename)
+        try:
+            anim.save(save_path, writer='pillow', fps=10)
+            print(f"动画已保存到: {save_path}")
+        except Exception as e:
+            print(f"!!! 错误：保存动画失败。错误信息: {e} !!!")
+            print("这可能是由于matplotlib后端或Pillow库的问题。请尝试更新库：pip install --upgrade matplotlib pillow")
+
         plt.close(fig)
     
     def plot_pheromone_evolution(self, pheromone_history, save_path=None):
@@ -368,22 +413,29 @@ class Visualizer:
         filename = f"episode_{episode_num}_{status}.png"
         save_path = os.path.join(self.output_dir, filename)
         
+        # 渲染基础框架（信息素地图和环境背景）
         fig = self.render_frame(agent_pos, target_pos, title=title)
         
-        # 在环境图上绘制完整轨迹
+        # 在环境图（第二个子图）上绘制完整轨迹
         if len(fig.axes) >= 2:
-            ax = fig.axes[1]  # 环境图
+            ax = fig.axes[1]
             trajectory = np.array(trajectory)
+
+            # 根据成功与否定义线条样式和标签
+            line_style = 'g-' if success else 'r--'
+            line_label = f'Trajectory ({status})'
+            
+            # 绘制轨迹并赋予标签
             ax.plot(
                 trajectory[:, 0], trajectory[:, 1], 
-                'g-' if success else 'r--', 
-                linewidth=2, alpha=0.7, label=f'Trajectory ({status})'
+                line_style, 
+                linewidth=2, alpha=0.7, label=line_label
             )
+            # 因为我们刚刚明确地添加了一个带标签的 plot, 所以这里调用 legend() 是安全的
             ax.legend()
         
         plt.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
         plt.close(fig)
-
 
 if __name__ == "__main__":
     # 测试可视化功能

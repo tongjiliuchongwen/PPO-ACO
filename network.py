@@ -53,8 +53,10 @@ class ActorNetwork(nn.Module):
         # 动作均值输出层
         self.mean_layer = nn.Linear(128, output_dim)
         
-        # 动作标准差输出层（使用对数标准差）
-        self.log_std_layer = nn.Linear(128, output_dim)
+        # >>>>> 核心修改点 1: 将 log_std 变成一个可学习的参数，而不是一个网络层 <<<<<
+        # 这样它就不会依赖于输入 obs，在整个训练中作为一个全局探索参数
+        # 初始值设为 0.0 对应 std=exp(0)=1.0，这是一个很大的探索范围
+        self.log_std = nn.Parameter(torch.zeros(output_dim))
         
         # 权重初始化
         self._init_weights()
@@ -68,23 +70,22 @@ class ActorNetwork(nn.Module):
         
         # 初始化均值层为较小的值
         nn.init.orthogonal_(self.mean_layer.weight, gain=0.01)
-        
-        # 初始化标准差层
-        nn.init.constant_(self.log_std_layer.weight, 0)
-        nn.init.constant_(self.log_std_layer.bias, -0.5)
-    
+
     def forward(self, x):
         """
         前向传播
-        返回动作均值和对数标准差
+        返回动作均值和标准差
         """
         shared_features = self.shared_layers(x)
         
         mean = self.mean_layer(shared_features)
-        log_std = self.log_std_layer(shared_features)
         
-        # 限制标准差范围
-        log_std = torch.clamp(log_std, -20, 2)
+        # >>>>> 核心修改点 2: 使用我们定义的 nn.Parameter 作为 log_std <<<<<
+        # 它会广播到和 mean 一样的形状
+        log_std = self.log_std
+        
+        # 仍然可以对 log_std 进行 clamp 作为保护
+        log_std = torch.clamp(log_std, -5, 2)
         std = torch.exp(log_std)
         
         return mean, std
