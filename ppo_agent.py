@@ -36,7 +36,15 @@ class PPO:
         # 优化器
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=config.LEARNING_RATE)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=config.LEARNING_RATE)
-        
+        # 使用线性衰减，在总迭代次数内将学习率从初始值衰减到0
+        self.actor_scheduler = torch.optim.lr_scheduler.LambdaLR(
+            self.actor_optimizer, 
+            lr_lambda=lambda iteration: 1.0 - (iteration / config.TOTAL_ITERATIONS)
+            )
+        self.critic_scheduler = torch.optim.lr_scheduler.LambdaLR(
+            self.critic_optimizer,
+            lr_lambda=lambda iteration: 1.0 - (iteration / config.TOTAL_ITERATIONS)
+            )
         # PPO超参数
         self.gamma = config.GAMMA
         self.clip_ratio = config.CLIP
@@ -61,38 +69,41 @@ class PPO:
         
     def get_action(self, observation, aco_system=None):
         """
-        根据观测获取动作，集成ACO信息素引导
+        根据观测获取动作，并区分探索动作和原始动作。
         
         Args:
             observation: 当前观测
             aco_system: ACO系统实例
         
         Returns:
-            action: 选择的动作
-            log_prob: 动作的对数概率
+            exploration_action: 最终执行的、可能被ACO引导的动作 (numpy array)
+            original_action: Actor网络原始采样的动作 (Tensor)
+            original_log_prob: 原始动作的对数概率 (Tensor)
         """
         with torch.no_grad():
             obs_tensor = torch.FloatTensor(observation).unsqueeze(0).to(self.device)
             
-            # 获取PPO基础动作分布
+            # 1. 从Actor网络获取原始的动作分布、采样动作和对数概率
             mean, std = self.actor(obs_tensor)
-            base_action = mean.cpu().numpy()[0]
+            dist = torch.distributions.Normal(mean, std)
             
+            original_action = dist.sample()  # 这是Actor真正想执行的动作（Tensor形式）
+            original_log_prob = dist.log_prob(original_action).sum(dim=-1) # 这是用于训练的log_prob
+            
+            # 将原始动作转换为numpy数组，用于后续的ACO引导计算
+            base_action_np = original_action.cpu().numpy()[0]
+            
+            # 2. 如果有ACO系统，则使用其引导来生成最终的探索动作
             if aco_system is not None:
-                # 集成ACO信息素引导
-                final_action = self._integrate_aco_guidance(
-                    observation, base_action, aco_system
+                # 集成ACO信息素引导，得到最终要探索的动作
+                exploration_action = self._integrate_aco_guidance(
+                    observation, base_action_np, aco_system
                 )
             else:
-                final_action = base_action
+                # 如果没有ACO引导，探索动作就是原始动作
+                exploration_action = base_action_np
             
-            # 从最终分布中采样
-            final_action_tensor = torch.FloatTensor(final_action).unsqueeze(0).to(self.device)
-            
-            # 计算对数概率
-            log_prob, _ = self.actor.evaluate_action(obs_tensor, final_action_tensor)
-            
-            return final_action, log_prob.cpu().numpy()[0]
+            return exploration_action, original_action, original_log_prob
     
     def _integrate_aco_guidance(self, observation, base_action, aco_system):
         """
@@ -198,16 +209,16 @@ class PPO:
                 current_pos = self.env.get_agent_position()
                 ep_trajectory.append(current_pos.copy())
                 
-                # 获取动作
-                action, log_prob = self.get_action(obs, aco_system)
+                # 获取动作：同时获得用于探索和用于训练的动作/log_prob
+                exploration_action, original_action, original_log_prob = self.get_action(obs, aco_system)
                 
-                # 执行动作
-                next_obs, reward, done, truncated, info = self.env.step(action)
+                # 在环境中执行的是被ACO引导过的探索动作
+                next_obs, reward, done, truncated, info = self.env.step(exploration_action)
                 
-                # 存储经验
+                # 存储经验时，存储的是Actor网络原始的输出，这是PPO训练所必需的
                 ep_obs.append(obs)
-                ep_acts.append(action)
-                ep_log_probs.append(log_prob)
+                ep_acts.append(original_action.cpu().numpy()[0])      # 存储原始动作
+                ep_log_probs.append(original_log_prob.cpu().numpy()[0]) # 存储原始log_prob
                 ep_rews.append(reward)
                 
                 obs = next_obs
@@ -223,7 +234,8 @@ class PPO:
             batch_obs.extend(ep_obs)
             batch_acts.extend(ep_acts)
             batch_log_probs.extend(ep_log_probs)
-            batch_rews.extend(ep_rews)
+            # 注意：这里的奖励 batch_rews 应该是 ep_rews，而不是 batch_rews
+            batch_rews.append(ep_rews)
             batch_lens.append(len(ep_obs))
             
             # 检查是否成功（到达目标）
@@ -253,8 +265,12 @@ class PPO:
         self.logger['batch_rews'].append(episode_rewards)
         self.logger['batch_success_rate'].append(success_rate)
         
+        # 注意：batch_rews 的收集方式有误，已在上面更正。现在返回的是正确的 batch_rews
+        # 这里需要将 batch_rews 从一个 list of lists 展平
+        flat_batch_rews = [rew for ep_rews in batch_rews for rew in ep_rews]
+
         return (np.array(batch_obs), np.array(batch_acts), 
-                np.array(batch_log_probs), np.array(batch_rews), 
+                np.array(batch_log_probs), np.array(flat_batch_rews), 
                 batch_lens)
     
     def compute_advantages(self, batch_obs, batch_rews, batch_lens):
@@ -304,6 +320,9 @@ class PPO:
         batch_advantages = np.array(batch_advantages)
         batch_advantages = (batch_advantages - np.mean(batch_advantages)) / (np.std(batch_advantages) + 1e-8)
         
+        batch_returns = np.array(batch_returns)
+        batch_returns = (batch_returns - np.mean(batch_returns)) / (np.std(batch_returns) + 1e-8)
+        
         return batch_advantages, np.array(batch_returns)
     
     def update_networks(self, batch_obs, batch_acts, batch_log_probs, 
@@ -326,12 +345,28 @@ class PPO:
             # 计算当前策略的对数概率和熵
             current_log_probs, entropy = self.actor.evaluate_action(obs_tensor, acts_tensor)
             
-            # 计算比率
-            ratio = torch.exp(current_log_probs - old_log_probs_tensor)
+            # >>>>> 核心修改点：在计算 exp 之前增加数值稳定性 <<<<<
+            # 1. 计算对数概率的比率
+            log_ratio = current_log_probs - old_log_probs_tensor
+            
+            # 2. 对 log_ratio 进行裁剪，防止其值过大或过小导致 exp 溢出
+            # 这个范围可以根据需要调整，[-20, 20] 是一个比较安全的选择
+            log_ratio = torch.clamp(log_ratio, -20.0, 20.0)
+            
+            # 3. 计算比率
+            ratio = torch.exp(log_ratio)
             
             # 计算clipped surrogate loss
             surr1 = ratio * advantages_tensor
             surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * advantages_tensor
+            
+            # (可选的调试步骤) 检查计算过程中是否已出现 nan
+            if torch.isnan(surr1).any() or torch.isnan(surr2).any():
+                print("!!! 警告: 在计算 surrogate loss 时检测到 NaN，跳过本次更新。 !!!")
+                # 如果需要深入调试，可以在这里设置断点
+                # import pdb; pdb.set_trace()
+                continue  # 跳过此次更新，防止 nan 污染梯度
+
             actor_loss = -torch.min(surr1, surr2).mean() - 0.01 * entropy.mean()
             
             # 更新Actor
@@ -356,6 +391,7 @@ class PPO:
         # 更新统计信息
         self.logger['actor_losses'].append(np.mean(actor_losses))
         self.logger['critic_losses'].append(np.mean(critic_losses))
+
     
     def learn(self, total_iterations, aco_system=None):
         """

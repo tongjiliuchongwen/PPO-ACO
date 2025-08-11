@@ -186,6 +186,12 @@ def train_ppo_aco(args):
                 aco_system.save_pheromone_map(aco_path)
                 
                 print(f"模型已保存到: {checkpoint_path}")
+            ppo_agent.actor_scheduler.step()
+            ppo_agent.critic_scheduler.step()
+
+            if iteration % 50 == 0: # 定期打印当前学习率
+                current_lr = ppo_agent.actor_optimizer.param_groups[0]['lr']
+                print(f"              LR: Current Learning Rate = {current_lr:.6f}")
     
     except KeyboardInterrupt:
         print("\n训练被用户中断")
@@ -258,40 +264,22 @@ def test_ppo_aco(args):
         # 记录初始状态
         episode_trajectory.append(env.get_agent_position().copy())
         
+        # 运行一个完整的回合，只收集数据
         while not (done or truncated):
             # 获取动作（使用ACO引导）
-            action, _ = ppo_agent.get_action(obs, aco_system)
+            exploration_action, _, _ = ppo_agent.get_action(obs, aco_system)
             
             # 执行动作
-            obs, reward, done, truncated, info = env.step(action)
+            obs, reward, done, truncated, info = env.step(exploration_action)
             
             # 记录数据
             episode_trajectory.append(env.get_agent_position().copy())
             episode_reward += reward
             step_count += 1
-            
-            # 可视化（每5步或结束时）
-            if args.render and (step_count % 5 == 0 or done or truncated):
-                agent_pos = env.get_agent_position()
-                target_pos = env.get_target_position()
-                agent_theta = env.get_agent_orientation()
-                
-                title = f"Test Episode {episode+1}, Step {step_count}"
-                save_path = f"visualizations/test_ep{episode+1}_step{step_count}.png"
-                fig = visualizer.render_frame(agent_pos, target_pos, agent_theta, title=title)
-                
-                # 在环境图上绘制轨迹
-                if len(fig.axes) >= 2:
-                    ax = fig.axes[1]
-                    traj_array = np.array(episode_trajectory)
-                    if len(traj_array) > 1:
-                        ax.plot(traj_array[:, 0], traj_array[:, 1], 'g-', linewidth=2, alpha=0.7)
-                
-                plt.savefig(save_path, dpi=100, bbox_inches='tight')
-                plt.close(fig)
         
-        # 统计结果
-        success = done and not info.get('collision', False)
+        # 回合结束后，进行统计
+        success = done and not info.get('collision', False) and info.get('distance_to_target', 99) < config.TARGET_RADIUS
+
         if success:
             successful_episodes += 1
         
@@ -309,14 +297,14 @@ def test_ppo_aco(args):
               f"Steps = {step_count:3d}, "
               f"Success = {'Yes' if success else 'No'}")
         
-        # 保存回合可视化
+        # 如果启用了渲染，为这个回合生成一张最终的图片
         if args.render:
             visualizer.save_episode_visualization(
-                episode_trajectory, episode+1, success
+                episode_trajectory, episode + 1, success
             )
     
-    # 测试结果统计
-    success_rate = successful_episodes / total_episodes
+    # 最终测试结果统计
+    success_rate = successful_episodes / total_episodes if total_episodes > 0 else 0.0
     avg_reward = np.mean(total_rewards)
     avg_length = np.mean(episode_lengths)
     
@@ -342,13 +330,14 @@ def test_ppo_aco(args):
             for i, pos in enumerate(best_traj['trajectory']):
                 animation_data.append({
                     'agent_pos': pos,
-                    'target_pos': env.get_target_position(),
-                    'agent_theta': 0,  # 简化处理
+                    'target_pos': env.get_target_position(), # 直接从环境中获取最终目标位置
+                    'agent_theta': 0,  # 简化处理，不显示朝向
                     'trajectory': best_traj['trajectory'][:i+1]
                 })
             
             visualizer.generate_animation(animation_data, "test_best_trajectory.gif")
-
+        else:
+            print("没有成功的轨迹，无法生成动画。")
 def main():
     """主函数"""
     args = parse_arguments()

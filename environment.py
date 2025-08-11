@@ -73,17 +73,29 @@ class ActiveParticleEnv(gym.Env):
             if not self._is_collision(self.agent_pos):
                 break
                 
+        #while True:
+        #    self.target_pos = np.random.uniform(
+        #        -self.env_bounds + 1, 
+        #        self.env_bounds - 1, 
+        #        size=2
+        #    )
+            # 确保目标不在障碍物内部，且距离智能体足够远
+        #    if (not self._is_collision(self.target_pos) and 
+        #        np.linalg.norm(self.target_pos - self.agent_pos) > 3.0):
+        #        break
+
+        self.target_pos = np.array([8.0, 8.0]) # 例如，固定在右上角
+        
+        # 确保智能体的初始位置与目标保持一定距离，并且不在障碍物内
         while True:
-            self.target_pos = np.random.uniform(
+            self.agent_pos = np.random.uniform(
                 -self.env_bounds + 1, 
                 self.env_bounds - 1, 
                 size=2
             )
-            # 确保目标不在障碍物内部，且距离智能体足够远
-            if (not self._is_collision(self.target_pos) and 
+            if (not self._is_collision(self.agent_pos) and
                 np.linalg.norm(self.target_pos - self.agent_pos) > 3.0):
-                break
-        
+                break        
         # 随机初始朝向
         self.agent_theta = np.random.uniform(0, 2 * np.pi)
         
@@ -98,6 +110,9 @@ class ActiveParticleEnv(gym.Env):
         
         # 限制动作范围
         omega = np.clip(action[0], -self.omega_max, self.omega_max)
+        
+        # >>>>> 关键修改点 1: 在移动前记录当前与目标的距离 <<<<<
+        previous_distance_to_target = np.linalg.norm(self.agent_pos - self.target_pos)
         
         # 更新朝向（加入旋转噪声）
         if self.enable_noise:
@@ -122,7 +137,7 @@ class ActiveParticleEnv(gym.Env):
         else:
             trans_noise = np.zeros(2)
         
-        # 更新位置
+        # 预测新位置
         new_pos = self.agent_pos + (velocity + trans_noise) * self.dt
         
         # 边界检查
@@ -136,33 +151,47 @@ class ActiveParticleEnv(gym.Env):
             reward = self.collision_penalty
             done = True
             truncated = False
+            # 碰撞后，位置不更新，所以当前距离等于先前距离
+            current_distance_to_target = previous_distance_to_target
         else:
-            # 更新位置
+            # 安全，更新位置
             self.agent_pos = new_pos
             
-            # 检查是否到达目标
-            distance_to_target = np.linalg.norm(self.agent_pos - self.target_pos)
+            # >>>>> 关键修改点 2: 在移动后计算新的距离 <<<<<
+            current_distance_to_target = np.linalg.norm(self.agent_pos - self.target_pos)
             
-            if distance_to_target < self.target_radius:
+            # 检查是否到达目标
+            if current_distance_to_target < self.target_radius:
                 reward = self.target_reward
                 done = True
                 truncated = False
+            # 检查是否超时
             elif self.current_step >= self.max_steps:
-                reward = self.step_penalty
+                reward = self.step_penalty  # 可以保留一个小的超时惩罚
                 done = False
                 truncated = True
             else:
-                # 基础时间惩罚，可以加入距离相关的奖励塑形
-                reward = self.step_penalty
-                # 可选：加入距离奖励塑形
-                # reward += -0.001 * distance_to_target
+                # >>>>> 核心修改：实现奖励塑形 (Reward Shaping) <<<<<
+                
+                # 1. 计算距离变化带来的奖励/惩罚
+                # 如果距离变小 (previous > current)，则 distance_reward 为正
+                # 如果距离变大 (previous < current)，则 distance_reward 为负
+                distance_reward =0# previous_distance_to_target - current_distance_to_target
+                
+                # 2. 引入一个缩放因子来调整这个奖励的重要性
+                # 这个因子需要调试，可以从 1.0, 10.0, 50.0 开始尝试
+                shaping_scaling_factor = 10.0 
+                
+                # 3. 最终奖励 = 基础时间惩罚 + 距离变化奖励
+                reward = self.step_penalty + (shaping_scaling_factor * distance_reward)
+
                 done = False
                 truncated = False
         
         observation = self._get_observation()
         info = {
             'collision': collision,
-            'distance_to_target': np.linalg.norm(self.agent_pos - self.target_pos),
+            'distance_to_target': current_distance_to_target,
             'agent_pos': self.agent_pos.copy(),
             'target_pos': self.target_pos.copy()
         }
