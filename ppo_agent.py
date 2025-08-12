@@ -185,12 +185,11 @@ class PPO:
         batch_obs = []
         batch_acts = []
         batch_log_probs = []
-        batch_rews = []
+        batch_rews_list = [] # 用于存储每个回合的奖励列表
         batch_lens = []
         
         # 记录成功轨迹
         episode_trajectories = []
-        episode_rewards = []
         
         t = 0
         while t < self.timesteps_per_batch:
@@ -205,20 +204,17 @@ class PPO:
             truncated = False
             
             while not (done or truncated):
-                # 记录当前位置
                 current_pos = self.env.get_agent_position()
                 ep_trajectory.append(current_pos.copy())
                 
-                # 获取动作：同时获得用于探索和用于训练的动作/log_prob
                 exploration_action, original_action, original_log_prob = self.get_action(obs, aco_system)
                 
-                # 在环境中执行的是被ACO引导过的探索动作
-                next_obs, reward, done, truncated, info = self.env.step(exploration_action)
+                # >>>>> 核心修改点：将 aco_system 传递给 step 函数 <<<<<
+                next_obs, reward, done, truncated, info = self.env.step(exploration_action, aco_system)
                 
-                # 存储经验时，存储的是Actor网络原始的输出，这是PPO训练所必需的
                 ep_obs.append(obs)
-                ep_acts.append(original_action.cpu().numpy()[0])      # 存储原始动作
-                ep_log_probs.append(original_log_prob.cpu().numpy()[0]) # 存储原始log_prob
+                ep_acts.append(original_action.cpu().numpy()[0])
+                ep_log_probs.append(original_log_prob.cpu().numpy()[0])
                 ep_rews.append(reward)
                 
                 obs = next_obs
@@ -227,47 +223,34 @@ class PPO:
                 if t >= self.timesteps_per_batch:
                     break
             
-            # 记录最后位置
             ep_trajectory.append(self.env.get_agent_position().copy())
             
-            # 存储回合数据
             batch_obs.extend(ep_obs)
             batch_acts.extend(ep_acts)
             batch_log_probs.extend(ep_log_probs)
-            # 注意：这里的奖励 batch_rews 应该是 ep_rews，而不是 batch_rews
-            batch_rews.append(ep_rews)
+            batch_rews_list.append(ep_rews)
             batch_lens.append(len(ep_obs))
             
-            # 检查是否成功（到达目标）
             if done and not info.get('collision', False):
-                # 计算路径质量（路径长度的倒数）
                 path_length = len(ep_trajectory)
                 path_quality = 1.0 / path_length if path_length > 0 else 0.0
-                
                 episode_trajectories.append({
                     'trajectory': ep_trajectory,
                     'quality': path_quality,
                     'reward': sum(ep_rews)
                 })
-            
-            episode_rewards.append(sum(ep_rews))
-        
-        # 存储成功轨迹用于ACO更新
+
         self.successful_trajectories = episode_trajectories
         
-        # 计算成功率
         success_count = len(episode_trajectories)
         total_episodes = len(batch_lens)
         success_rate = success_count / total_episodes if total_episodes > 0 else 0.0
         
-        # 更新统计信息
         self.logger['batch_lens'].append(batch_lens)
-        self.logger['batch_rews'].append(episode_rewards)
+        self.logger['batch_rews'].append([sum(ep_rews) for ep_rews in batch_rews_list])
         self.logger['batch_success_rate'].append(success_rate)
         
-        # 注意：batch_rews 的收集方式有误，已在上面更正。现在返回的是正确的 batch_rews
-        # 这里需要将 batch_rews 从一个 list of lists 展平
-        flat_batch_rews = [rew for ep_rews in batch_rews for rew in ep_rews]
+        flat_batch_rews = [rew for ep_rews in batch_rews_list for rew in ep_rews]
 
         return (np.array(batch_obs), np.array(batch_acts), 
                 np.array(batch_log_probs), np.array(flat_batch_rews), 

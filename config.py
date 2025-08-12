@@ -22,7 +22,7 @@ ROTATIONAL_NOISE_STD = 0.2   # 旋转噪声标准差 (对应 sqrt(2*D_theta*dt))
 # --- PPO 算法超参数 ---
 TIMESTEPS_PER_BATCH = 2048
 N_UPDATES_PER_ITERATION = 10
-LEARNING_RATE = 3e-5
+LEARNING_RATE = 5e-5
 GAMMA = 0.99
 CLIP = 0.1
 
@@ -31,8 +31,9 @@ EVAPORATION_RATE = 0.05  # 信息素蒸发率
 DEPOSIT_AMOUNT = 100.0   # 每次成功路径投放的信息素总量
 
 # --- 混合算法参数 ---
-ALPHA_Q_VALUE = 0.5  # PPO策略网络输出的权重
-BETA_PHEROMONE = 0.5  # 信息素的权重
+ALPHA_Q_VALUE = 0.7
+BETA_PHEROMONE = 0.3
+ACO_KERNEL_SIZE = 9 # <<<<< 新增参数，从3改为7
 
 # --- 物理参数 ---
 V0 = 1.0  # 智能体基础速度
