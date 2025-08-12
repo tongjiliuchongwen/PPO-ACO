@@ -1,235 +1,133 @@
-# PPO-ACO Hybrid Algorithm Framework
+# PPO-ACO：用于活性粒子导航的混合强化学习框架
 
-一个完整的、模块化的、可交互的、可视化的Python框架，实现了PPO（Proximal Policy Optimization）和ACO（Ant Colony Optimization）的混合算法，用于训练智能体在包含障碍物的二维连续空间中导航到目标位置。
+本项目是一个完整、模块化、可交互且可视化的Python框架，专为智能体控制领域的研究而设计。它实现了一种新颖的混合算法，该算法结合了**近端策略优化（PPO）**和**蚁群优化（ACO）**，用于训练智能体在一个包含障碍物和物理噪声的二维连续空间中，导航一个微观活性粒子到达目标点。
+
+本框架的核心目标不仅仅是解决一个导航任务，更是作为一个**研究平台**，旨在深入探究深度强化学习（负责实时局部决策）与群体智能（提供全局历史启发）之间协同作用的机制。
 
 ## 🚀 核心特性
 
-- **PPO算法**: 深度强化学习算法，训练智能体进行实时局部决策
-- **ACO系统**: 蚁群优化算法，提供基于历史经验的全局路径引导
-- **朗之万动力学**: 实现真实的微观粒子物理运动模型，包含噪声
-- **障碍物避障**: 支持用户自定义的圆形障碍物
-- **实时可视化**: 信息素热力图、轨迹动画、训练统计图表
-- **模块化设计**: 清晰的代码结构，易于扩展和修改
+- **混合智能核心**: 实现了一种独特的**PPO（局部策略学习）**与**ACO（全局路径引导）**的融合机制。
+- **基于物理的环境**: 模拟器基于**朗之万动力学**构建，可复现一个真实的活性粒子物理模型，包括自驱动、平动噪声和旋转噪声。
+- **新颖的奖励机制**: 独创了一种**基于信息素的奖励塑形（Reward Shaping）**机制。智能体的奖励来源于集体经验所形成的“信息素场”的梯度，这使得学习过程在物理上更合理、逻辑上更自洽。
+- **交互式实验配置**: 所有的物理、环境和算法参数都在 `config.py` 文件中集中管理，方便用户进行实验设计，包括自定义障碍物布局和调整噪声等级。
+- **全面的可视化功能**: 可生成富有洞察力的可视化结果，包括实时信息素热力图、智能体轨迹（区分成功/失败案例）、训练统计曲线（奖励、成功率、损失函数）以及最佳回合的GIF动画。
+- **模块化与可扩展设计**: 代码结构清晰，采用面向对象设计，易于阅读、修改，并为未来的研究方向提供了良好的扩展性。
 
 ## 📁 项目结构
 
 ```
-/ppo_aco_project/
+/PPO-ACO-main/
 ├── main.py             # 主执行文件，负责训练和测试流程的调度
-├── config.py           # 配置文件，用于用户交互，设置所有超参数和环境参数
-├── environment.py      # 定义 ActiveParticleEnv 环境类
+├── config.py           # 所有参数的中央配置文件
+├── environment.py      # 定义 ActiveParticleEnv 环境类（物理引擎）
 ├── network.py          # 定义 Actor 和 Critic 神经网络结构
-├── ppo_agent.py        # 实现 PPO 算法的核心逻辑，包含与ACO的融合点
-├── aco_system.py       # 实现蚁群系统，负责信息素地图的维护和更新
-├── visualizer.py       # 可视化工具，用于实时渲染或生成训练/测试结果动画
-├── models/             # 存储训练好的模型
-├── logs/               # 存储训练日志
-└── visualizations/     # 存储可视化结果
+├── ppo_agent.py        # 实现 PPO 算法及其与ACO的融合逻辑
+├── aco_system.py       # 管理信息素地图（更新、查询、蒸发）
+├── visualizer.py       # 可视化工具，用于绘图和生成动画
+├── models/             # 存储训练好的模型检查点
+├── logs/               # 存储训练日志（如果实现）
+└── visualizations/     # 存储所有可视化结果
 ```
 
-## 🛠️ 安装依赖
+## 🛠️ 安装指南
 
-```bash
-pip install torch torchvision
-pip install gymnasium
-pip install matplotlib
-pip install numpy
-pip install pillow  # 用于生成GIF动画
-```
+1.  克隆本仓库:
+    ```bash
+    git clone https://github.com/your-username/PPO-ACO-main.git
+    cd PPO-ACO-main
+    ```
+2.  创建并激活Python虚拟环境 (推荐):
+    ```bash
+    python -m venv venv
+    # Windows 系统
+    .\venv\Scripts\activate
+    # macOS/Linux 系统
+    source venv/bin/activate
+    ```
+3.  安装依赖库:
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-## ⚙️ 配置说明
+## ⚙️ 使用方法
 
-所有参数都可以在 `config.py` 中进行配置：
+所有实验参数都可以通过修改 `config.py` 文件进行配置。程序的主入口是 `main.py`。
 
-### 环境参数
-- `GRID_SIZE`: 信息素网格大小 (默认: 50)
-- `ENV_BOUNDS`: 环境边界 (默认: 10.0)
-- `MAX_STEPS_PER_EPISODE`: 每回合最大步数 (默认: 250)
+### 训练模型
 
-### 障碍物设置
-```python
-OBSTACLES = [
-    (2.0, 3.0, 1.0),     # (x, y, radius)
-    (-5.0, -5.0, 1.5),
-    (0.0, -7.0, 0.8)
-]
-```
+**基础训练命令:**
+此命令将使用 `config.py` 中的默认参数开始训练，并将最终模型保存到 `models/ppo_aco_model.pth`。
 
-### 噪声控制
-```python
-ENABLE_NOISE = True                    # 是否启用噪声
-TRANSLATIONAL_NOISE_STD = 0.1         # 平移噪声标准差
-ROTATIONAL_NOISE_STD = 0.2            # 旋转噪声标准差
-```
-
-### PPO超参数
-- `LEARNING_RATE`: 学习率 (默认: 3e-4)
-- `GAMMA`: 折扣因子 (默认: 0.99)
-- `CLIP`: PPO剪切参数 (默认: 0.2)
-- `TIMESTEPS_PER_BATCH`: 批次大小 (默认: 2048)
-
-### ACO超参数
-- `EVAPORATION_RATE`: 信息素蒸发率 (默认: 0.05)
-- `DEPOSIT_AMOUNT`: 信息素沉积量 (默认: 100.0)
-
-### 混合算法参数
-- `ALPHA_Q_VALUE`: PPO策略权重 (默认: 0.7)
-- `BETA_PHEROMONE`: 信息素权重 (默认: 0.3)
-
-## 🚀 使用方法
-
-### 训练模式
-
-基础训练命令：
 ```bash
 python main.py --mode train
 ```
 
-带可视化的训练：
+**推荐的训练命令:**
+此命令将运行500轮迭代，每50轮保存一次模型检查点，启用可视化结果的生成，并在有CUDA显卡时使用GPU加速。
+
 ```bash
-python main.py --mode train --render
+# 使用 GPU 训练
+python main.py --mode train --iterations 500 --save_freq 50 --render --device cuda
+
+# 仅使用 CPU 训练
+python main.py --mode train --iterations 500 --save_freq 50 --render
 ```
 
-自定义训练参数：
+### 测试已训练的模型
+
+**基础测试命令:**
+测试默认路径下的最终模型 (`models/ppo_aco_model.pth`)。
+
 ```bash
-python main.py --mode train --iterations 500 --device cuda --render --save_freq 50
+python main.py --mode test
 ```
 
-### 测试模式
+**推荐的测试命令:**
+测试在训练过程中保存的“最佳”模型，进行20个回合的评估，并生成包括GIF动画在内的详细可视化结果。
 
-基础测试命令：
 ```bash
-python main.py --mode test --model_path models/ppo_aco_model.pth
+python main.py --mode test --model_path models/ppo_aco_model_best.pth --test_episodes 20 --render
 ```
 
-带可视化的测试：
-```bash
-python main.py --mode test --model_path models/ppo_aco_model.pth --render --test_episodes 20
+---
+
+## 🔬 科学概念与创新点
+
+本框架的构建基于以下几个核心的科学思考：
+
+### 1. “上帝视角”问题
+在强化学习中，标准的奖励塑形（Reward Shaping）常常依赖于全局信息（例如智能体到目标的欧几里得距离）。对于一个微观智能体来说，这种设定在物理上是不真实的。本项目明确地指出了这一问题，并探索了其替代方案。
+
+### 2. 基于信息素的奖励塑形 (核心创新点)
+我们不再基于距离来奖励智能体，而是基于**信息素场的梯度**：
+`奖励 = f(Δ信息素浓度)`
+这意味着智能体通过“嗅探”由集体成功经验留下的“气味”来学习。这创建了一个自洽的、物理意义更强的学习闭环。
+
+### 3. 消融实验与实验控制
+本框架的设计旨在方便进行科学探究。通过在 `config.py` 中调整 `ALPHA_Q_VALUE` 和 `BETA_PHEROMONE` 的权重，研究者可以轻松地进行**消融实验**，以定量地衡量ACO引导所带来的影响。
+- **纯PPO实验**: `ALPHA_Q_VALUE = 1.0`, `BETA_PHEROMONE = 0.0`
+- **PPO+ACO混合实验**: `ALPHA_Q_VALUE = 0.7`, `BETA_PHEROMONE = 0.3`
+
+### 4. 平滑的信息素感知
+为解决训练初期信息素信号稀疏的问题，智能体感知的不是单个点位的浓度，而是其周围一个小区域（由 `kernel_size` 定义）的**平均信息素浓度**。这平滑了奖励的“地形”，并加速了学习的冷启动过程。
+
+## 📊 预期结果
+
+一次成功的训练后（例如500-1000轮迭代），你应该能观察到：
+- 训练统计图中的**成功率和平均奖励稳步上升**。
+- **信息素地图**从一片空白演化为一条清晰的、指向目标区域的“高速公路”。
+- 在测试中，训练好的智能体展现出**智能行为**，能够有效规避障碍物。
+- 在开启噪声（`ENABLE_NOISE = True`）的情况下，智能体依然表现出**强大的鲁棒性**，证明它学到的是一个通用的策略，而不仅仅是记忆某条特定路径。
+
+## 📚 未来研究方向
+
+本平台可作为一个坚实的基础，用于探索众多前沿的研究课题：
+- **动态环境**: 将框架扩展至处理移动目标或动态障碍物的场景。
+- **多智能体系统**: 扩展环境和ACO系统以支持多智能体协作和自组装，并可尝试集成**图神经网络（GNN）**来建模智能体间的交互。
+- **高级奖励机制**: 探究更复杂的自适应奖励机制，例如使用**课程学习（Curriculum Learning）**动态调整奖励函数。
+- **比较算法分析**: 利用本平台，系统性地横向比较不同启发式算法（如粒子群优化PSO、遗传算法GA）在作为PPO全局引导时的性能表现。
+
+## 📄 开源许可证
+
+本项目基于 MIT License 开源。
 ```
-
-### 命令行参数说明
-
-- `--mode`: 运行模式 (`train` 或 `test`)
-- `--model_path`: 模型保存/加载路径
-- `--iterations`: 训练迭代次数
-- `--device`: 计算设备 (`cpu` 或 `cuda`)
-- `--render`: 启用可视化
-- `--save_freq`: 模型保存频率
-- `--test_episodes`: 测试回合数
-- `--seed`: 随机种子
-
-## 🧠 算法原理
-
-### PPO (局部决策专家)
-智能体通过PPO学习一个实时的、局部的控制策略。它根据眼前的状态（与目标的相对位置、自身朝向）做出即时动作（改变转向）。
-
-### ACO (全局历史向导)
-整个环境被一个"信息素场"覆盖。成功的路径会增强其轨迹上的信息素，形成一个"经验地图"。这个地图为PPO的决策提供全局的、基于历史经验的引导。
-
-### 融合机制
-在PPO智能体进行动作选择时，它不仅要考虑自己神经网络的输出，还要参考其下一步可能到达位置的信息素浓度，综合两者做出最终决策：
-
-```python
-final_score = ALPHA_Q_VALUE * ppo_preference + BETA_PHEROMONE * pheromone_value
-```
-
-### 反馈回路
-PPO智能体每完成一次成功的任务，其走过的路径将被用来更新和加强全局的信息素地图，从而在下一次迭代中更好地指导智能体。
-
-## 📊 可视化功能
-
-### 训练过程可视化
-- 信息素热力图演化
-- 实时训练统计图表
-- 成功率和奖励曲线
-
-### 测试结果可视化
-- 轨迹动画生成
-- 单回合可视化结果
-- 成功/失败路径对比
-
-## 🔬 实验自定义
-
-### 修改环境设置
-在 `config.py` 中修改：
-```python
-# 添加更多障碍物
-OBSTACLES = [
-    (1.0, 2.0, 0.8),
-    (-3.0, -1.0, 1.2),
-    (4.0, -4.0, 1.0),
-    # 添加更多...
-]
-
-# 调整环境大小
-ENV_BOUNDS = 15.0  # 更大的环境
-
-# 修改噪声强度
-TRANSLATIONAL_NOISE_STD = 0.05  # 更小的噪声
-```
-
-### 调整算法参数
-```python
-# 更偏向PPO的决策
-ALPHA_Q_VALUE = 0.8
-BETA_PHEROMONE = 0.2
-
-# 更快的信息素蒸发
-EVAPORATION_RATE = 0.1
-```
-
-## 🏃‍♂️ 快速开始示例
-
-1. **基础训练**：
-```bash
-# 训练1000轮，每100轮保存一次模型
-python main.py --mode train --iterations 1000 --save_freq 100 --render
-```
-
-2. **测试训练好的模型**：
-```bash
-# 测试20个回合并生成可视化
-python main.py --mode test --test_episodes 20 --render
-```
-
-3. **自定义实验**：
-   - 修改 `config.py` 中的障碍物配置
-   - 调整PPO和ACO的权重比例
-   - 重新训练并比较结果
-
-## 📈 预期结果
-
-训练成功后，你应该观察到：
-- 成功率逐渐提高（通常在几百轮后达到70%以上）
-- 平均奖励增加
-- 信息素地图形成从起始区域到目标区域的"高速公路"
-- 智能体能够有效避开障碍物并找到最优路径
-
-## 🐛 常见问题
-
-### Q: 训练不收敛怎么办？
-A: 尝试：
-- 降低学习率：`LEARNING_RATE = 1e-4`
-- 增加批次大小：`TIMESTEPS_PER_BATCH = 4096`
-- 调整PPO-ACO权重比例
-
-### Q: 智能体总是撞到障碍物？
-A: 可能需要：
-- 增加碰撞惩罚：`COLLISION_PENALTY = -100.0`
-- 降低噪声强度
-- 增加训练轮数
-
-### Q: 可视化图片保存在哪里？
-A: 所有可视化结果保存在 `visualizations/` 目录中
-
-## 📚 扩展建议
-
-- 添加更复杂的障碍物形状（矩形、多边形）
-- 实现多智能体协作
-- 添加动态障碍物
-- 引入更复杂的奖励函数
-- 实现在线学习能力
-
-## 📄 License
-
-本项目基于MIT License开源。
