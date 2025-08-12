@@ -5,6 +5,10 @@ import gymnasium as gym
 from gymnasium import spaces
 import math
 import config
+# 导入 ACOSystem 只是为了类型提示，避免循环导入
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from aco_system import ACOSystem
 
 class ActiveParticleEnv(gym.Env):
     """
@@ -23,9 +27,9 @@ class ActiveParticleEnv(gym.Env):
         self.rot_noise_std = config.ROTATIONAL_NOISE_STD
         
         # 物理参数
-        self.v0 = config.V0  # 基础速度
-        self.omega_max = config.OMEGA_MAX  # 最大角速度
-        self.dt = config.DT  # 时间步长
+        self.v0 = config.V0
+        self.omega_max = config.OMEGA_MAX
+        self.dt = config.DT
         self.target_radius = config.TARGET_RADIUS
         
         # 奖励参数
@@ -33,7 +37,7 @@ class ActiveParticleEnv(gym.Env):
         self.target_reward = config.TARGET_REWARD
         self.collision_penalty = config.COLLISION_PENALTY
         
-        # 动作空间：角速度 omega，范围 [-omega_max, omega_max]
+        # 动作空间
         self.action_space = spaces.Box(
             low=-self.omega_max, 
             high=self.omega_max, 
@@ -41,7 +45,7 @@ class ActiveParticleEnv(gym.Env):
             dtype=np.float32
         )
         
-        # 观测空间：[dx, dy, cos(theta), sin(theta), distance_to_target]
+        # 观测空间
         self.observation_space = spaces.Box(
             low=-np.inf, 
             high=np.inf, 
@@ -50,9 +54,9 @@ class ActiveParticleEnv(gym.Env):
         )
         
         # 状态变量
-        self.agent_pos = np.zeros(2)  # [x, y]
-        self.agent_theta = 0.0  # 朝向角度
-        self.target_pos = np.zeros(2)  # 目标位置
+        self.agent_pos = np.zeros(2)
+        self.agent_theta = 0.0
+        self.target_pos = np.zeros(2)
         self.current_step = 0
         
     def reset(self, seed=None, options=None):
@@ -63,30 +67,10 @@ class ActiveParticleEnv(gym.Env):
             
         self.current_step = 0
         
-        # 随机生成智能体和目标位置，确保不在障碍物内部
-        while True:
-            self.agent_pos = np.random.uniform(
-                -self.env_bounds + 1, 
-                self.env_bounds - 1, 
-                size=2
-            )
-            if not self._is_collision(self.agent_pos):
-                break
-                
-        #while True:
-        #    self.target_pos = np.random.uniform(
-        #        -self.env_bounds + 1, 
-        #        self.env_bounds - 1, 
-        #        size=2
-        #    )
-            # 确保目标不在障碍物内部，且距离智能体足够远
-        #    if (not self._is_collision(self.target_pos) and 
-        #        np.linalg.norm(self.target_pos - self.agent_pos) > 3.0):
-        #        break
-
-        self.target_pos = np.array([8.0, 8.0]) # 例如，固定在右上角
+        # 固定目标位置
+        self.target_pos = np.array([8.0, 8.0])
         
-        # 确保智能体的初始位置与目标保持一定距离，并且不在障碍物内
+        # 随机化智能体初始位置
         while True:
             self.agent_pos = np.random.uniform(
                 -self.env_bounds + 1, 
@@ -95,7 +79,8 @@ class ActiveParticleEnv(gym.Env):
             )
             if (not self._is_collision(self.agent_pos) and
                 np.linalg.norm(self.target_pos - self.agent_pos) > 3.0):
-                break        
+                break
+                
         # 随机初始朝向
         self.agent_theta = np.random.uniform(0, 2 * np.pi)
         
@@ -104,94 +89,76 @@ class ActiveParticleEnv(gym.Env):
         
         return observation, info
     
-    def step(self, action):
-        """执行一步动作"""
+    def step(self, action, aco_system: 'ACOSystem' = None):
+        """
+        执行一步动作，奖励函数基于区域平均信息素浓度变化
+        """
         self.current_step += 1
         
-        # 限制动作范围
         omega = np.clip(action[0], -self.omega_max, self.omega_max)
         
-        # >>>>> 关键修改点 1: 在移动前记录当前与目标的距离 <<<<<
-        previous_distance_to_target = np.linalg.norm(self.agent_pos - self.target_pos)
-        
-        # 更新朝向（加入旋转噪声）
+        # 在移动前，获取当前位置的区域平均信息素浓度
+        if aco_system is not None:
+            previous_pheromone = aco_system.get_average_pheromone(self.agent_pos, kernel_size=config.ACO_KERNEL_SIZE)
+        else:
+            previous_pheromone = 0.0
+
+        # 更新朝向
         if self.enable_noise:
             rot_noise = np.random.normal(0, self.rot_noise_std * np.sqrt(self.dt))
         else:
             rot_noise = 0.0
+        self.agent_theta = (self.agent_theta + (omega + rot_noise) * self.dt) % (2 * np.pi)
         
-        self.agent_theta += (omega + rot_noise) * self.dt
-        self.agent_theta = self.agent_theta % (2 * np.pi)  # 保持在 [0, 2π] 范围内
-        
-        # 计算位移（朗之万动力学）
-        velocity = np.array([
-            self.v0 * np.cos(self.agent_theta),
-            self.v0 * np.sin(self.agent_theta)
-        ])
-        
-        # 加入平动噪声
+        # 计算位移
+        velocity = np.array([self.v0 * np.cos(self.agent_theta), self.v0 * np.sin(self.agent_theta)])
         if self.enable_noise:
-            trans_noise = np.random.normal(
-                0, self.trans_noise_std * np.sqrt(self.dt), size=2
-            )
+            trans_noise = np.random.normal(0, self.trans_noise_std * np.sqrt(self.dt), size=2)
         else:
             trans_noise = np.zeros(2)
         
-        # 预测新位置
+        # 预测新位置并检查边界
         new_pos = self.agent_pos + (velocity + trans_noise) * self.dt
-        
-        # 边界检查
         new_pos = np.clip(new_pos, -self.env_bounds, self.env_bounds)
         
         # 碰撞检测
         collision = self._is_collision(new_pos)
         
         if collision:
-            # 碰撞时不更新位置，给予负奖励并结束回合
             reward = self.collision_penalty
             done = True
             truncated = False
-            # 碰撞后，位置不更新，所以当前距离等于先前距离
-            current_distance_to_target = previous_distance_to_target
         else:
-            # 安全，更新位置
             self.agent_pos = new_pos
             
-            # >>>>> 关键修改点 2: 在移动后计算新的距离 <<<<<
-            current_distance_to_target = np.linalg.norm(self.agent_pos - self.target_pos)
+            # 在移动后，获取新位置的区域平均信息素浓度
+            if aco_system is not None:
+                current_pheromone = aco_system.get_average_pheromone(self.agent_pos, kernel_size=config.ACO_KERNEL_SIZE)
+            else:
+                current_pheromone = 0.0
+
+            distance_to_target = np.linalg.norm(self.agent_pos - self.target_pos)
             
-            # 检查是否到达目标
-            if current_distance_to_target < self.target_radius:
+            if distance_to_target < self.target_radius:
                 reward = self.target_reward
                 done = True
                 truncated = False
-            # 检查是否超时
             elif self.current_step >= self.max_steps:
-                reward = self.step_penalty  # 可以保留一个小的超时惩罚
+                reward = self.step_penalty
                 done = False
                 truncated = True
             else:
-                # >>>>> 核心修改：实现奖励塑形 (Reward Shaping) <<<<<
-                
-                # 1. 计算距离变化带来的奖励/惩罚
-                # 如果距离变小 (previous > current)，则 distance_reward 为正
-                # 如果距离变大 (previous < current)，则 distance_reward 为负
-                distance_reward =0# previous_distance_to_target - current_distance_to_target
-                
-                # 2. 引入一个缩放因子来调整这个奖励的重要性
-                # 这个因子需要调试，可以从 1.0, 10.0, 50.0 开始尝试
-                shaping_scaling_factor = 10.0 
-                
-                # 3. 最终奖励 = 基础时间惩罚 + 距离变化奖励
-                reward = self.step_penalty + (shaping_scaling_factor * distance_reward)
-
+                # 基于信息素的奖励塑形
+                pheromone_reward = current_pheromone - previous_pheromone
+                shaping_scaling_factor = 500.0 # 这个值可能需要调试
+                reward = self.step_penalty + (shaping_scaling_factor * pheromone_reward)
                 done = False
                 truncated = False
         
         observation = self._get_observation()
         info = {
             'collision': collision,
-            'distance_to_target': current_distance_to_target,
+            'distance_to_target': np.linalg.norm(self.agent_pos - self.target_pos),
             'agent_pos': self.agent_pos.copy(),
             'target_pos': self.target_pos.copy()
         }
@@ -200,24 +167,25 @@ class ActiveParticleEnv(gym.Env):
     
     def _get_observation(self):
         """获取当前观测"""
-        # 相对位置
         dx = self.target_pos[0] - self.agent_pos[0]
         dy = self.target_pos[1] - self.agent_pos[1]
         
-        # 朝向的三角函数表示
         cos_theta = np.cos(self.agent_theta)
         sin_theta = np.sin(self.agent_theta)
         
-        # 到目标的距离
         distance_to_target = np.linalg.norm(self.target_pos - self.agent_pos)
         
-        return np.array([dx, dy, cos_theta, sin_theta, distance_to_target], dtype=np.float32)
-    
+        # 归一化观测值
+        dx_norm = dx / self.env_bounds
+        dy_norm = dy / self.env_bounds
+        dist_norm = distance_to_target / (np.sqrt(2) * self.env_bounds)
+
+        return np.array([dx_norm, dy_norm, cos_theta, sin_theta, dist_norm], dtype=np.float32)
+
     def _is_collision(self, position):
         """检查给定位置是否与障碍物碰撞"""
         for obs_x, obs_y, obs_radius in self.obstacles:
-            distance = np.linalg.norm(position - np.array([obs_x, obs_y]))
-            if distance < obs_radius:
+            if np.linalg.norm(position - np.array([obs_x, obs_y])) < obs_radius:
                 return True
         return False
     

@@ -81,6 +81,42 @@ class ACOSystem:
         grid_coords = self.world_to_grid(position)
         return self.pheromone_map[grid_coords[1], grid_coords[0]]  # 注意y,x顺序
     
+    # >>>>> 新增的核心函数 <<<<<
+    def get_average_pheromone(self, position, kernel_size=3):
+        """
+        获取指定位置周围一个区域内的平均信息素浓度。
+
+        Args:
+            position: 世界坐标 [x, y]
+            kernel_size: 感知区域的边长（必须是奇数，如3, 5, 7）
+
+        Returns:
+            avg_pheromone: 该区域的平均信息素浓度
+        """
+        if kernel_size % 2 == 0:
+            # 确保kernel_size是奇数，以便有明确的中心点
+            kernel_size += 1
+            # raise ValueError("Kernel size must be an odd number.")
+
+        # 获取中心点的网格坐标
+        center_gx, center_gy = self.world_to_grid(position)
+
+        # 计算感知区域的边界
+        radius = kernel_size // 2
+        min_x = max(0, center_gx - radius)
+        max_x = min(self.grid_size - 1, center_gx + radius)
+        min_y = max(0, center_gy - radius)
+        max_y = min(self.grid_size - 1, center_gy + radius)
+
+        # 提取该区域的信息素值
+        pheromone_patch = self.pheromone_map[min_y : max_y + 1, min_x : max_x + 1]
+        
+        # 计算平均值
+        if pheromone_patch.size == 0:
+            return 0.1 # 如果区域无效（不太可能发生），返回一个默认值
+        
+        return np.mean(pheromone_patch)
+
     def get_pheromone_gradient(self, position):
         """
         获取指定位置的信息素梯度（用于梯度引导）
@@ -102,14 +138,14 @@ class ACOSystem:
             grad_x = (self.pheromone_map[gy, gx + 1] - self.pheromone_map[gy, gx - 1]) / 2.0
         elif gx == 0:
             grad_x = self.pheromone_map[gy, gx + 1] - self.pheromone_map[gy, gx]
-        else:  # gx == self.grid_size - 1
+        else:
             grad_x = self.pheromone_map[gy, gx] - self.pheromone_map[gy, gx - 1]
         
         if gy > 0 and gy < self.grid_size - 1:
             grad_y = (self.pheromone_map[gy + 1, gx] - self.pheromone_map[gy - 1, gx]) / 2.0
         elif gy == 0:
             grad_y = self.pheromone_map[gy + 1, gx] - self.pheromone_map[gy, gx]
-        else:  # gy == self.grid_size - 1
+        else:
             grad_y = self.pheromone_map[gy, gx] - self.pheromone_map[gy - 1, gx]
         
         return np.array([grad_x, grad_y])
@@ -119,31 +155,20 @@ class ACOSystem:
         在成功路径上沉积信息素
         
         Args:
-            trajectory: 路径轨迹，包含一系列世界坐标点 [[x1,y1], [x2,y2], ...]
-            path_quality: 路径质量，影响信息素沉积量（可选）
+            trajectory: 路径轨迹
+            path_quality: 路径质量
         """
         if len(trajectory) == 0:
             return
         
-        # 计算路径质量（如果未提供）
         if path_quality is None:
-            # 使用路径长度的倒数作为质量指标
-            path_length = 0.0
-            for i in range(1, len(trajectory)):
-                path_length += np.linalg.norm(
-                    np.array(trajectory[i]) - np.array(trajectory[i-1])
-                )
-            path_quality = 1.0 / (path_length + 1e-6)  # 避免除零
+            path_length = sum(np.linalg.norm(np.array(trajectory[i]) - np.array(trajectory[i-1])) for i in range(1, len(trajectory)))
+            path_quality = 1.0 / (path_length + 1e-6)
         
-        # 计算每个点应该沉积的信息素量
         deposit_per_point = self.deposit_amount * path_quality / len(trajectory)
         
-        # 在轨迹上的每个点沉积信息素
         for position in trajectory:
-            grid_coords = self.world_to_grid(position)
-            gx, gy = grid_coords[0], grid_coords[1]
-            
-            # 在该点及其邻域沉积信息素（使用高斯分布）
+            gx, gy = self.world_to_grid(position)
             self._deposit_gaussian(gx, gy, deposit_per_point)
         
         self.total_deposits += 1
@@ -151,24 +176,16 @@ class ACOSystem:
     def _deposit_gaussian(self, center_x, center_y, amount, sigma=1.0):
         """
         在指定中心周围以高斯分布沉积信息素
-        
-        Args:
-            center_x, center_y: 中心网格坐标
-            amount: 总沉积量
-            sigma: 高斯分布的标准差
         """
-        # 计算影响范围
-        radius = int(3 * sigma)  # 3σ原则
+        radius = int(3 * sigma)
         
-        for i in range(max(0, center_x - radius), min(self.grid_size, center_x + radius + 1)):
-            for j in range(max(0, center_y - radius), min(self.grid_size, center_y + radius + 1)):
-                # 计算距离
-                dist_sq = (i - center_x) ** 2 + (j - center_y) ** 2
-                
-                # 计算高斯权重
-                weight = np.exp(-dist_sq / (2 * sigma ** 2))
-                
-                # 沉积信息素
+        x_range = range(max(0, center_x - radius), min(self.grid_size, center_x + radius + 1))
+        y_range = range(max(0, center_y - radius), min(self.grid_size, center_y + radius + 1))
+        
+        for i in x_range:
+            for j in y_range:
+                dist_sq = (i - center_x)**2 + (j - center_y)**2
+                weight = np.exp(-dist_sq / (2 * sigma**2))
                 self.pheromone_map[j, i] += amount * weight
     
     def evaporate(self):
@@ -176,10 +193,7 @@ class ACOSystem:
         信息素蒸发
         """
         self.pheromone_map *= (1 - self.evaporation_rate)
-        
-        # 确保信息素不会完全消失
         self.pheromone_map = np.maximum(self.pheromone_map, 0.01)
-        
         self.total_evaporation_steps += 1
     
     def reset(self):
@@ -193,9 +207,6 @@ class ACOSystem:
     def get_statistics(self):
         """
         获取ACO系统统计信息
-        
-        Returns:
-            stats: 包含各种统计信息的字典
         """
         return {
             'mean_pheromone': np.mean(self.pheromone_map),
@@ -213,7 +224,6 @@ class ACOSystem:
     def load_pheromone_map(self, filename):
         """从文件加载信息素地图"""
         self.pheromone_map = np.load(filename)
-
 
 if __name__ == "__main__":
     # 测试ACO系统
